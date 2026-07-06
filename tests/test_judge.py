@@ -183,6 +183,24 @@ def test_null_plan_items_score_zero_substance():
     assert pairwise_judge({}, nulls, real, [], llm) == "B"
 
 
+def test_falsy_scalar_plan_items_score_zero_substance():
+    # Content-free JSON scalars other than null — false / 0 / 0.0 / true — stringify to
+    # "false"/"0"/"0.0"/"true": not blank, not filler, so without the isinstance(str) guard
+    # they slip through and inflate the plan's substance rank. Only genuine string items count.
+    assert _plan_substance([False, False, False, False]) == 0
+    assert _plan_substance([0, 0, 0, 0]) == 0
+    assert _plan_substance([0.0, 0.0, 0.0]) == 0
+    assert _plan_substance([True, 1, 2, 3]) == 0
+    # Falsy scalars mixed with a real item contribute nothing beyond the real item.
+    assert _plan_substance([False, "add retry to loader", 0]) == 1
+
+    llm = LLM(api_key="offline")
+    real = {"plan": [{"title": "fix loader race", "kind": "bugfix"}]}
+    pad = {"plan": [False, False, False]}
+    assert pairwise_judge({}, real, pad, [], llm) == "A"
+    assert pairwise_judge({}, pad, real, [], llm) == "B"
+
+
 def test_verbose_fluff_plan_does_not_beat_concise_substance():
     # A long plan padded with empty-of-substance items must NOT beat a shorter plan
     # of real maintainer actions. Guards the length-over-substance failure (#54);

@@ -105,10 +105,11 @@ def _item_substance(item) -> int:
     if isinstance(item, dict):
         title = (_text(item.get("title")) or _text(item.get("theme"))).lower()
     else:
-        # A JSON `null` plan item stringifies to "none" — neither blank nor a filler word —
-        # so it would slip past the guard below and score 1, letting a null-padded plan
-        # inflate its rank. Treat None as blank; genuine scalar (string) items still count.
-        title = "" if item is None else str(item).strip().lower()
+        # A non-string scalar plan item carries no real title text: a JSON `null`/`false`/`0`
+        # stringifies to "none"/"false"/"0" — none blank, none a filler word — so it would
+        # slip past the guard below and score 1, letting a padded plan inflate its rank. Only
+        # genuine scalar (string) items count; every other scalar is treated as blank.
+        title = item.strip().lower() if isinstance(item, str) else ""
     if not title or title in _FILLER_TITLES:
         return 0
     weight = 1
