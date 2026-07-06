@@ -25,6 +25,11 @@ _PR_NUMBER = re.compile(
     r"(?:#\s*(\d+)\b|(?:pull\s+request|pr)\s+#?\s*(\d+)\b)",
     re.I,
 )
+# A bare "#7" (no "PR"/"pull request" nearby) is common English for an ordinal/ranking
+# ("our #1 priority", "the #1 requested feature"), not necessarily a PR reference. Only trust
+# it as an explicit, ground-truth reference when the same text also contains PR-referencing
+# context; otherwise let the item fall through to the content-based matching below.
+_PR_CONTEXT = re.compile(r"\b(?:pr|pull\s+request)\b", re.I)
 # Minimum PR-subject phrase length for substring matching — shorter titles are ambiguous.
 _MIN_SUBJECT_PHRASE = 8
 
@@ -88,14 +93,22 @@ def _significant_tokens(text: str) -> set:
 
 
 def _explicit_pr_number(*texts: str) -> int | None:
-    """Return an explicit PR number referenced in plan text, if any."""
+    """Return an explicit PR number referenced in plan text, if any.
+
+    The "PR #7" / "pull request 7" forms (``match.group(2)``) are unambiguous. A bare "#7"
+    (``match.group(1)``) is only trusted when the same text also contains PR-referencing
+    context — otherwise it's as likely to be an ordinal/ranking numeral in prose ("the #1
+    requested feature") as a real PR reference, and treating it as ground truth would corrupt
+    an unrelated plan item.
+    """
     for text in texts:
         if not text:
             continue
         for match in _PR_NUMBER.finditer(text):
-            raw = match.group(1) or match.group(2)
-            if raw:
-                return int(raw)
+            if match.group(2) is not None:
+                return int(match.group(2))
+            if match.group(1) is not None and _PR_CONTEXT.search(text):
+                return int(match.group(1))
     return None
 
 

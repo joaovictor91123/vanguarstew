@@ -89,6 +89,28 @@ def test_explicit_pr_number_in_title_or_rationale():
     assert _matched_pr(item, prs) == prs[0]
 
 
+def test_bare_hash_number_without_pr_context_is_not_treated_as_explicit_reference():
+    """A bare '#N' used as an ordinal/ranking numeral must not be trusted as a PR reference.
+
+    "#1" here means "top priority", not "pull request 1" — there is no "PR"/"pull request"
+    context anywhere in the text, unlike every genuine explicit reference.
+    """
+    assert _explicit_pr_number("Ship the #1 requested feature: dark mode") is None
+
+
+def test_ordinal_hash_number_does_not_corrupt_unrelated_plan_item():
+    # An open PR happens to share its number with an incidental ordinal in the item text.
+    # The item is about "dark mode" and has nothing to do with the open "config validation"
+    # PR — it must pass through unchanged, not be down-weighted to triage.
+    ctx = {"open_prs": [{"number": 1, "title": "Add config validation"}]}
+    plan = [{"title": "Ship the #1 requested feature: dark mode", "kind": "feature",
+             "rationale": "Users have been asking for this for months"}]
+    out = reconcile_plan_with_queue(plan, ctx, 5)
+    feature = [i for i in out if i.get("kind") == "feature"]
+    assert len(feature) == 1
+    assert "restates_pr" not in feature[0]
+
+
 def test_one_token_pr_title_does_not_match_on_weak_overlap():
     prs = [{"number": 3, "title": "loader"}]
     # Incidental mention of the same word must not count as restating the PR.
