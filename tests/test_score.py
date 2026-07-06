@@ -244,16 +244,17 @@ def test_parse_semver_with_and_without_leading_v():
     assert parse_semver("no version here") is None
 
 
-def test_parse_semver_returns_last_version_when_multiple():
-    """In a release subject, the project's version follows incidental versions (#266)."""
+def test_parse_semver_returns_correct_version_when_multiple_present():
+    """The project's own version must be found regardless of where it sits relative to an
+    incidental version (a language runtime, a dependency spec) in the same subject (#266)."""
     assert parse_semver("Support Python 3.11, release 1.4.0") == (1, 4, 0)
-    # Single-version inputs are unchanged (last == first).
+    # Single-version inputs are unchanged.
     assert parse_semver("v1.2.0") == (1, 2, 0)
     assert parse_semver("1.2.0") == (1, 2, 0)
 
 
-def test_released_version_uses_last_version_not_first():
-    """The release version must be extracted, not an earlier runtime/dep version."""
+def test_released_version_uses_correct_version_not_first_or_last():
+    """The release version must be extracted, not an earlier/later runtime/dep version."""
     revealed = [
         {"subject": "Support Python 3.11, release 1.4.0"},
     ]
@@ -264,6 +265,20 @@ def test_released_version_uses_last_version_not_first():
 
     # Non-release subjects are filtered out.
     assert released_version([{"subject": "fix crash in v1.2.0 parser"}]) is None
+
+
+def test_parse_semver_prefers_version_near_release_keyword_over_earlier_number():
+    # An earlier, unrelated version-looking number (a language/runtime version) must not
+    # shadow the actual release version that follows the release keyword.
+    assert parse_semver("Support Python 3.11, release 1.4.0") == (1, 4, 0)
+    assert parse_semver("release 1.2.0 fixes Python 3.11 support") == (1, 2, 0)
+    assert parse_semver("bump version to 2.0.0 for numpy 1.26.4 support") == (2, 0, 0)
+
+
+def test_released_version_ignores_earlier_unrelated_number_in_release_subject():
+    revealed = [{"subject": "Support Python 3.11, release 1.4.0", "files": ["CHANGELOG.md"]}]
+    assert released_version(revealed) == (1, 4, 0)
+    assert bump_level((1, 3, 0), released_version(revealed)) == "minor"
 
 
 def test_bump_level_major_minor_patch():

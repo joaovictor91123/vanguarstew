@@ -31,20 +31,47 @@ def _tokens(text: str) -> set:
     return set(_TOK.findall((text or "").lower()))
 
 
-def parse_semver(text: str):
-    """Parse the *last* semver core in `text` -> (major, minor, patch), or None.
+def _semver_tuple(m) -> tuple:
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
-    In a release commit subject the project's own version typically appears after
-    incidental versions (language runtimes, dependency specs), so the last version
-    is the most reliable signal. Tolerant of a leading ``v`` and of a missing patch
-    (``1.2`` -> (1, 2, 0)), and ignores any pre-release/build suffix. Returns None
-    when no version-looking token is present.
+
+def parse_semver(text: str):
+    """Parse the semver core that actually denotes the version in `text` -> (major, minor,
+    patch), or None.
+
+    Tolerant of a leading `v` and of a missing patch (`1.2` -> (1, 2, 0)), and ignores any
+    pre-release/build suffix. Returns None when no version-looking token is present.
+
+    A subject can contain more than one version-looking number (e.g. a language/runtime
+    version alongside the actual release version: "Support Python 3.11, release 1.4.0"), so we
+    don't just grab the first match in the string, nor always the last (a release subject can
+    just as easily lead with the real version and trail with an incidental one, e.g. "Release
+    v2.0.0 (bumps numpy to 1.26.4)"). If the subject *is* a version tag
+    (`_RELEASE_TAG_SUBJECT`), the tag itself is authoritative. Otherwise, when a release
+    keyword is present, prefer the version nearest to it (immediately following it, or else
+    immediately preceding it) over an unrelated number elsewhere in the text.
     """
-    matches = _SEMVER.findall(text or "")
+    s = text or ""
+    tag_match = _RELEASE_TAG_SUBJECT.match(s)
+    if tag_match:
+        m = _SEMVER.search(s, 0, tag_match.end())
+        if m:
+            return _semver_tuple(m)
+
+    matches = list(_SEMVER.finditer(s))
     if not matches:
         return None
-    m = matches[-1]
-    return (int(m[0]), int(m[1]), int(m[2] or 0))
+
+    kw_match = _RELEASE_KW.search(s)
+    if kw_match:
+        after = [m for m in matches if m.start() >= kw_match.end()]
+        if after:
+            return _semver_tuple(min(after, key=lambda m: m.start()))
+        before = [m for m in matches if m.start() < kw_match.start()]
+        if before:
+            return _semver_tuple(max(before, key=lambda m: m.start()))
+
+    return _semver_tuple(matches[0])
 
 
 def _latest_semver(texts) -> tuple | None:
