@@ -44,16 +44,31 @@ def main() -> None:
                     help="exit 1 when any floor is missed (for CI gating)")
     args = ap.parse_args()
 
-    result = check_component_floors(load_artifact(args.artifact),
-                                    min_composite=args.min_composite,
-                                    min_judge=args.min_judge,
-                                    min_objective=args.min_objective)
-    print(component_floor_headline(result), file=sys.stderr)
-    for check in result["checks"]:
-        mark = "PASS" if check["passed"] else "FAIL"
-        print(f"  [{mark}] {check['name']}: {check['detail']}", file=sys.stderr)
+    # OSError covers FileNotFoundError, PermissionError, and IsADirectoryError alike;
+    # json.JSONDecodeError is invalid JSON; ValueError is a valid-JSON non-object artifact.
+    # Same guard as every sibling artifact CLI under scripts/.
+    try:
+        artifact = load_artifact(args.artifact)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
 
-    print(json.dumps(result, indent=2))
+    # A loadable artifact can still be arbitrarily malformed inside, so the floor check and
+    # rendering get the same clean-error treatment as loading -- a CI step must never see a
+    # raw traceback from a bad artifact.
+    try:
+        result = check_component_floors(artifact,
+                                        min_composite=args.min_composite,
+                                        min_judge=args.min_judge,
+                                        min_objective=args.min_objective)
+        print(component_floor_headline(result), file=sys.stderr)
+        for check in result["checks"]:
+            mark = "PASS" if check["passed"] else "FAIL"
+            print(f"  [{mark}] {check['name']}: {check['detail']}", file=sys.stderr)
+        print(json.dumps(result, indent=2))
+    except (KeyError, TypeError, ValueError) as exc:
+        print(f"component_floor: cannot evaluate artifact: {exc!r}", file=sys.stderr)
+        sys.exit(1)
 
     if args.strict and not result["passed"]:
         sys.exit(1)

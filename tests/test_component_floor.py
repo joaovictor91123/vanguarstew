@@ -1,7 +1,9 @@
 """Tests for the per-component score-floor gate (deterministic, offline)."""
 
 import copy
+import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -332,3 +334,141 @@ def test_held_out_weak_components_do_not_affect_tuned_gate():
     )
     result = check_component_floors(art, min_composite=0.5, min_judge=0.4, min_objective=0.4)
     assert result["passed"] is True
+
+
+# --- CLI: a bad artifact must never surface a raw traceback (#1267) -------------------
+
+
+def _run_cli(*args):
+    return subprocess.run(
+        [sys.executable, "-m", "scripts.component_floor", *args],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+    )
+
+
+def _write(path, payload):
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return str(path)
+
+
+def _run_main_in_process(monkeypatch, argv):
+    import scripts.component_floor as component_floor_cli
+
+    monkeypatch.setattr(sys, "argv", ["scripts.component_floor", *argv])
+    with pytest.raises(SystemExit) as excinfo:
+        component_floor_cli.main()
+    return excinfo.value.code
+
+
+def test_cli_reports_a_clean_error_for_a_missing_file(tmp_path):
+    missing = tmp_path / "does-not-exist.json"
+    result = _run_cli(str(missing))
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    # the FileNotFoundError message itself, naming the offending path
+    assert "No such file or directory" in result.stderr
+    assert str(missing) in result.stderr
+
+
+def test_cli_reports_a_clean_error_for_invalid_json(tmp_path):
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{not valid json", encoding="utf-8")
+    result = _run_cli(str(invalid))
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    # the JSONDecodeError message with its parse position, not just "no traceback"
+    assert "Expecting property name enclosed in double quotes" in result.stderr
+    assert "line 1" in result.stderr
+
+
+def test_cli_reports_a_clean_error_for_a_non_object_artifact(tmp_path):
+    bad = _write(tmp_path / "bad.json", [1, 2, 3])
+    result = _run_cli(bad)
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    # load_artifact's ValueError message, naming the offending path
+    assert "must be a JSON object" in result.stderr
+    assert bad in result.stderr
+
+
+def test_cli_reports_a_clean_error_for_a_directory_path(tmp_path):
+    # IsADirectoryError is an OSError; end-to-end proof the guard covers the family even
+    # when the suite runs as root (a chmod-000 fixture would be readable to root).
+    unreadable = tmp_path / "a-directory"
+    unreadable.mkdir()
+    result = _run_cli(str(unreadable))
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert str(unreadable) in result.stderr
+
+
+def test_cli_reports_a_clean_error_for_a_permission_denied_file(tmp_path, monkeypatch, capsys):
+    # In-process, so it holds under any uid (root reads chmod-000 files, so a filesystem
+    # fixture cannot force EACCES deterministically): PermissionError must surface as the
+    # one-line OSError message and a clean exit 1, never a traceback.
+    import scripts.component_floor as component_floor_cli
+
+    denied = str(tmp_path / "denied.json")
+
+    def _deny(path):
+        raise PermissionError(13, "Permission denied", denied)
+
+    monkeypatch.setattr(component_floor_cli, "load_artifact", _deny)
+    code = _run_main_in_process(monkeypatch, [denied])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "Permission denied" in err
+    assert denied in err
+
+
+def test_cli_reports_a_clean_error_when_the_floor_check_itself_fails(tmp_path, monkeypatch, capsys):
+    # The guard is not just around loading: if the floor evaluation blows up on artifact
+    # content, the CLI must still exit 1 with a one-line error instead of a traceback.
+    import scripts.component_floor as component_floor_cli
+
+    good = _write(tmp_path / "good.json", _result(0.62, 0.7, 0.55))
+
+    def _boom(artifact, min_composite, min_judge, min_objective):
+        raise TypeError("unhashable artifact content")
+
+    monkeypatch.setattr(component_floor_cli, "check_component_floors", _boom)
+    code = _run_main_in_process(monkeypatch, [good])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "cannot evaluate artifact" in err
+
+
+def test_cli_runs_the_gate_and_emits_the_result_for_a_well_formed_artifact(tmp_path):
+    # Success path: exit 0, and the gate logic actually ran -- stdout carries the full result
+    # (every floor check) and stderr carries the headline plus a PASS line per check.
+    good = _write(tmp_path / "good.json", _result(0.62, 0.7, 0.55))
+    result = _run_cli(good)
+    assert result.returncode == 0
+    assert "Traceback" not in result.stderr
+
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is True
+    assert [c["name"] for c in payload["checks"]] == [
+        "composite_floor", "judge_floor", "objective_floor",
+    ]
+    assert payload["composite_mean"] == 0.62 and payload["judge_mean"] == 0.7
+    assert "[PASS] composite_floor" in result.stderr
+
+
+def test_cli_strict_exits_nonzero_when_a_floor_is_missed(tmp_path):
+    # --strict turns a missed floor into a CI failure, and still prints the result cleanly.
+    weak = _write(tmp_path / "weak.json", _result(0.55, 0.9, 0.2))
+    result = _run_cli(weak, "--strict")
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is False
+    assert "[FAIL] objective_floor" in result.stderr
+
+
+def test_cli_without_strict_exits_zero_even_when_a_floor_is_missed(tmp_path):
+    weak = _write(tmp_path / "weak.json", _result(0.55, 0.9, 0.2))
+    result = _run_cli(weak)
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["passed"] is False
