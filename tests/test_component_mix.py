@@ -65,6 +65,17 @@ def test_nan_parts_rejected():
     assert out["judge_fraction"] is None
 
 
+def test_overflowing_total_yields_none_fractions_not_fabricated_zero():
+    # judge_mean and objective_mean are each individually finite, but their SUM overflows to
+    # inf -- `total == 0` doesn't catch that, and dividing by inf used to silently produce a
+    # fabricated 0.0/0.0 instead of failing closed like every other edge case here.
+    out = summarize_component_mix(_single(1.5e308, 1.5e308))
+    assert out["judge_mean"] == 1.5e308
+    assert out["objective_mean"] == 1.5e308
+    assert out["judge_fraction"] is None
+    assert out["objective_fraction"] is None
+
+
 def test_generalization_reports_both_partitions():
     art = {
         "tuned": _single(0.8, 0.2),

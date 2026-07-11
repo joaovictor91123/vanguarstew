@@ -58,7 +58,12 @@ def _mix_from_parts(parts) -> dict:
             "objective_fraction": None,
         }
     total = judge + objective
-    if total == 0:
+    if total == 0 or not math.isfinite(total):
+        # Each of judge/objective is individually finite (checked above), but their SUM can
+        # still overflow to inf for two finite values near the top of the float range -- a
+        # plain `total == 0` check doesn't catch that, and dividing by an infinite total
+        # silently yields a fabricated 0.0/0.0 instead of failing closed like every other
+        # edge case here.
         return {
             "judge_mean": judge,
             "objective_mean": objective,
