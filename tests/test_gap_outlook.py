@@ -112,5 +112,20 @@ def test_non_finite_composite_mean_degrades_to_na(bad):
     assert out["verdict"] is None
     headline = gap_outlook_headline(out)
     assert "nan" not in headline
-    assert "inf" not in headline
+
+
+def test_oversized_int_composite_mean_degrades_to_na_instead_of_crashing():
+    # math.isfinite() raises OverflowError for a Python int too large to convert to a float
+    # (a hand-edited or degenerate artifact's composite_mean) -- must degrade the same way a
+    # NaN/Infinity value does, not crash outright.
+    from benchmark.gap_outlook import _is_number, _partition_score
+
+    assert _is_number(10**400) is False
+    assert _partition_score({"composite_mean": 10**400, "scored_repos": 2}) is None
+    out = summarize_gap_outlook(_gen(10**400, 0.5, 0.1))
+    assert out["generalization_gap"] is None
+    assert out["tuned_score"] is None
+    assert out["verdict"] is None
+    headline = gap_outlook_headline(out)
+    assert "n/a" in headline
     assert "n/a" in headline
